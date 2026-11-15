@@ -1,58 +1,95 @@
-# Camera Alert
+# Cảnh báo camera
 
-```text
-camera-alert/
-├── client/   Next.js App Router và TypeScript
-├── server/   FastAPI và SQLite
-└── README.md
-```
+`client/` là ứng dụng Next.js. `server/` là API FastAPI, worker nhận sự kiện và schema PostgreSQL.
 
-## Chạy trên máy tính
+| Vai trò | Quyền |
+| --- | --- |
+| Quản trị viên | Thêm, sửa, tắt hoặc xóa tối đa 20 camera. Tạo, khóa, mở lại tài khoản người dùng, cấp quyền xem từng camera và đặt lại mật khẩu. |
+| Người dùng | Xem ảnh và cảnh báo của camera được cấp quyền. Chọn giờ và loại sự kiện muốn nhận. |
 
-Cần Node.js 20.9 trở lên và Python 3.11 trở lên. Mở hai terminal tại thư mục `camera-alert`.
+Mọi tài khoản đăng nhập bằng email và mật khẩu. Đường dẫn đặt lại mật khẩu gửi qua SMTP, có hiệu lực 30 phút và dùng một lần. Quản trị viên đầu tiên được tạo bằng CLI.
 
-Terminal 1
+## 1. Chuẩn bị PostgreSQL và quản trị viên
+
+Cần Node.js 20.9+, Python 3.11+, PostgreSQL 14+ và máy chạy worker có đường mạng đến camera hoặc Frigate. Cài FFmpeg nếu cần chụp ảnh từ RTSP.
+
+Chạy từ thư mục gốc repo trên Linux/macOS.
 
 ```bash
 cd server
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m uvicorn main:app --reload
+cp .env.example .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Nếu dùng Windows PowerShell, thay dòng `source` bằng
-`.\.venv\Scripts\Activate.ps1`.
+Trên Windows PowerShell, kích hoạt bằng `.\.venv\Scripts\Activate.ps1` và dùng `Copy-Item .env.example .env`.
 
-Terminal 2
+Điền `DATABASE_URL` và dán khóa vừa tạo vào `CAMERA_SECRET_KEY` trong `server/.env`. Giữ khóa để worker đọc được thông tin camera đã lưu. Tài khoản PostgreSQL chạy schema cần quyền tạo bảng và chỉ mục. Chọn database riêng cho ứng dụng. Schema có thể chạy lại để khởi tạo cùng phiên bản.
 
 ```bash
-cd client
-npm install
-npm run dev
+python manage.py schema
+python manage.py create-admin --email admin@example.com --name "Quản trị viên"
 ```
 
-Mở [trang cảnh báo](http://127.0.0.1:3000) hoặc [tài liệu API](http://127.0.0.1:8000/docs).
-Cả hai ứng dụng mặc định chỉ lắng nghe trên máy đang chạy.
+Schema nằm ở `server/schema.sql`. Có thể chạy tập tin này bằng `psql` hoặc trình SQL thay cho lệnh `manage.py schema`.
 
-## Thử luồng cảnh báo
+## 2. Chạy ba tiến trình
 
-1. Giữ lịch mặc định 22:00–06:00. Lịch tính theo giờ Việt Nam và áp dụng trên mọi loại sự kiện.
-2. Gửi sự kiện **Phát hiện người** với giờ thử 23:00. Cảnh báo xuất hiện trong lịch sử.
-3. Gửi lại với giờ thử 12:00. Server bỏ qua sự kiện và lịch sử giữ nguyên.
-4. Đổi lịch và nhấn **Lưu khung giờ** trước khi thử tiếp.
+Mở ba terminal tại thư mục gốc repo. Hai terminal trong `server/` dùng môi trường Python đã kích hoạt ở bước 1.
 
-Mốc bắt đầu được tính vào khung giờ và mốc kết thúc nằm ngoài khung giờ.
-Hai mốc bằng nhau tương ứng với 24 giờ. Server lưu lịch và cảnh báo trong
-`server/data/camera.db`. Web hiển thị tối đa 50 cảnh báo được lưu gần nhất.
-
-## Cấu hình tùy chọn
-
-| Biến | Vị trí | Công dụng |
+| Tiến trình | Thư mục | Lệnh |
 | --- | --- | --- |
-| `CAMERA_API_URL` | `client/.env.local` | Địa chỉ Python API nếu đổi cổng hoặc host, mặc định `http://127.0.0.1:8000` |
-| `CAMERA_DB_PATH` | Môi trường của tiến trình Python | Đường dẫn tệp SQLite nếu cần lưu ở vị trí khác |
+| API | `server/` | `python -m uvicorn main:app --host 127.0.0.1 --port 8000` |
+| Worker | `server/` | `python worker.py` |
+| Web | `client/` | `npm ci` rồi `npm run dev` |
 
-Bản này chỉ dùng sự kiện mô phỏng. Tích hợp IMOU, chụp ảnh, quản lý nhiều camera
-và xác thực là các phần triển khai tiếp theo. Dữ liệu mô phỏng được ghi vào
-SQLite cùng lịch sử hiển thị để thử luồng lưu và đọc dữ liệu.
+Mở [web cục bộ](http://127.0.0.1:3000). Đăng nhập quản trị viên, thêm camera, rồi tạo người dùng và cấp quyền trong mục **Người dùng**. Khung mặc định 22:00–06:00 tính theo giờ Việt Nam. Cảnh báo bắt đầu lúc 22:00 và dừng lúc 06:00. Hai mốc bằng nhau áp dụng cả ngày. Lịch áp dụng cho từng tài khoản và cho các sự kiện mới phát sinh. Web tải cảnh báo mới mỗi 5 giây khi mở mục **Cảnh báo**.
+
+## 3. Thử IMOU qua ONVIF
+
+1. Đặt máy chạy worker cùng mạng với IMOU Ranger 2-L-3B32. Bật tính năng phát hiện người và chuyển động trong phần cài đặt camera. Xác định IP, cổng ONVIF và thông tin đăng nhập cục bộ từ thiết bị/mạng của bạn.
+2. Thêm camera với nguồn **ONVIF trực tiếp**. Nhập địa chỉ, cổng, tên đăng nhập và mật khẩu. Nếu đã xác minh luồng RTSP bằng VLC hoặc FFmpeg, điền luồng đó để lấy ảnh dự phòng.
+3. Để kiểm tra camera ID `1`, từ `server/` chạy `python worker.py --diagnose 1`. Đi ngang camera và đọc dòng chủ đề ONVIF, loại sự kiện nhận dạng và kết quả lấy JPEG. ID nằm trong danh sách camera của quản trị viên. Dùng Ctrl+C để kết thúc.
+4. Bật worker chính và tạm đặt lịch cả ngày để thử cảnh báo. Kiểm tra ảnh, giờ và loại sự kiện trong web. Sau đó đặt lại lịch 22:00–06:00.
+
+ONVIF dùng PullPoint để đọc sự kiện, thử lấy JPEG qua GetSnapshotUri và dùng FFmpeg nếu có RTSP dự phòng. Trạng thái **Đã kết nối** xác nhận worker đang trao đổi được với nguồn. Sự kiện phát hiện người và xâm nhập phụ thuộc chủ đề do firmware phát ra. Nếu máy nhận được luồng RTSP nhưng ONVIF thiếu các sự kiện cần thiết hoặc phát chủ đề chưa nhận dạng, dùng Frigate.
+
+## 4. Dùng Frigate khi chỉ có RTSP
+
+Cài [Frigate](https://docs.frigate.video/guides/getting_started/) và một MQTT broker trên máy trong mạng nội bộ. Mô hình phát hiện người chạy tại chỗ. Ví dụ cấu hình tối thiểu cho một camera trong Frigate:
+
+```yaml
+mqtt:
+  enabled: true
+  host: mosquitto
+  topic_prefix: frigate
+detect:
+  enabled: true
+  fps: 5
+objects:
+  track: [person]
+snapshots:
+  enabled: true
+cameras:
+  imou_san:
+    ffmpeg:
+      inputs:
+        - path: rtsp://USER:PASSWORD@192.168.1.25:554/PATH_DA_XAC_MINH
+          roles: [detect]
+    zones:
+      san_truoc:
+        coordinates: 0.1,0.4,0.9,0.4,0.9,0.95,0.1,0.95
+```
+
+Đổi địa chỉ MQTT, thông tin RTSP và vùng theo mạng của bạn. Tạo camera nguồn **Frigate cục bộ** với tên `imou_san` và vùng xâm nhập `san_truoc`. Khi một người đi vào vùng, worker ghi cảnh báo xâm nhập. Để thử chuyển động, tạo chuyển động trong khung hình và xem sự kiện riêng mà Frigate gửi.
+
+Trong `server/.env`, điền `FRIGATE_MQTT_HOST`, cổng và thông tin xác thực MQTT. Đặt `FRIGATE_URL` tới API Frigate nội bộ, ví dụ `http://127.0.0.1:5000` nếu cùng máy. Giữ cổng API nội bộ của Frigate trong mạng tin cậy. Nếu các thành phần chạy bằng container, thay `127.0.0.1` bằng địa chỉ dịch vụ mà worker truy cập được. Ảnh người có thể xuất hiện sau khi Frigate hoàn tất theo dõi sự kiện.
+
+## 5. Email và vận hành
+
+- Điền `SMTP_HOST`, `SMTP_PORT`, `SMTP_MODE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` trong `server/.env`. Dùng `SMTP_MODE=starttls` cho cổng 587 hoặc `ssl` cho cổng 465 theo cấu hình nhà cung cấp. Đặt `APP_URL` thành địa chỉ web mà người dùng mở được từ email.
+- Khi phục vụ người dùng qua HTTPS, đặt `COOKIE_SECURE=true`. Có thể chạy `npm run build` và `npm start` sau reverse proxy HTTPS. Nếu API đổi địa chỉ, đặt `CAMERA_API_URL` trong `client/.env.local` trước khi build.
+- Giữ worker chạy trong suốt thời gian cần giám sát. Worker lưu ảnh JPEG tối đa 2 MB vào PostgreSQL và dọn dữ liệu cũ mặc định sau 30 ngày. Đổi bằng `ALERT_RETENTION_DAYS`. Nếu nguồn sự kiện chưa trả được ảnh, giao diện hiển thị **Chưa có ảnh**.
+- Có thể tắt camera để giữ lịch sử. Xóa camera cũng xóa lịch sử, ảnh và quyền xem thuộc camera đó.

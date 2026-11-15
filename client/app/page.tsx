@@ -1,121 +1,66 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { CameraAdmin, UserAdmin } from "./admin";
+import { ApiError, Session, api } from "./api";
+import { AlertFeed, ScheduleForm } from "./dashboard";
+import { AuthCard, Login, Mark, Notice, useAction } from "./ui";
 
-const labels = {
-  person: "Phát hiện người",
-  motion: "Chuyển động",
-  intrusion: "Xâm nhập",
-};
+type Tab = "alerts" | "schedule" | "cameras" | "users";
+const tabs: Record<Tab, string> = { alerts: "Cảnh báo", schedule: "Lịch cảnh báo", cameras: "Camera", users: "Người dùng" };
 
-type Kind = keyof typeof labels;
-type Schedule = { start: string; end: string };
-type Alert = { id: number; camera: string; kind: Kind; occurred_at: string };
+export default function Home() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [tab, setTab] = useState<Tab>("alerts");
+  const [error, setError] = useState("");
+  const action = useAction();
 
-const formatter = new Intl.DateTimeFormat("vi-VN", {
-  dateStyle: "short",
-  timeStyle: "medium",
-  timeZone: "Asia/Ho_Chi_Minh",
-});
-
-async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(`/api/${path}`, {
-    method,
-    cache: "no-store",
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!response.ok) throw new Error(`API trả về lỗi HTTP ${response.status}.`);
-  return response.json() as Promise<T>;
-}
-
-export default function Dashboard() {
-  const [schedule, setSchedule] = useState<Schedule | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [kind, setKind] = useState<Kind>("person");
-  const [testTime, setTestTime] = useState("23:00");
-  const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState(true);
-
-  async function run(action: () => Promise<string>) {
-    setBusy(true);
-    setStatus("");
+  const load = useCallback(async () => {
+    setError("");
     try {
-      setStatus(await action());
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Không thể kết nối server.");
-    } finally {
-      setBusy(false);
+      setSession(await api<Session>("auth/me"));
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.status === 401) setSession(null);
+      else setError(failure instanceof Error ? failure.message : "Không thể tải tài khoản.");
     }
+  }, []);
+  const expired = useCallback(() => { setSession(null); setTab("alerts"); }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  if (session === undefined || error) {
+    return <AuthCard title={error ? "Không thể kết nối" : "Đang tải…"}>
+      <Notice error={error} />
+      {error && <button onClick={() => void load()}>Thử lại</button>}
+    </AuthCard>;
   }
+  if (!session) return <Login onLogin={() => void load()} />;
 
-  async function load() {
-    const [saved, latest] = await Promise.all([
-      request<Schedule>("schedule"),
-      request<Alert[]>("alerts"),
-    ]);
-    setSchedule(saved);
-    setAlerts(latest);
-    return "Đã tải dữ liệu.";
-  }
-
-  useEffect(() => { void run(load); }, []);
-
-  return (
-    <main>
-      <h1>Cảnh báo camera</h1>
-      <section>
-        <h2>Khung giờ cảnh báo</h2>
-        <p>Giờ Việt Nam. Hai mốc bằng nhau sẽ bật cảnh báo cả ngày.</p>
-        {schedule ? (
-          <form onSubmit={(event) => {
-            event.preventDefault();
-            void run(async () => {
-              setSchedule(await request<Schedule>("schedule", "PUT", schedule));
-              return "Đã lưu khung giờ.";
-            });
-          }}>
-            <label>Bắt đầu<input type="time" required value={schedule.start} disabled={busy}
-              onChange={(event) => setSchedule({ ...schedule, start: event.target.value })} /></label>
-            <label>Kết thúc<input type="time" required value={schedule.end} disabled={busy}
-              onChange={(event) => setSchedule({ ...schedule, end: event.target.value })} /></label>
-            <button disabled={busy}>Lưu khung giờ</button>
-          </form>
-        ) : <button disabled={busy} onClick={() => void run(load)}>Thử tải lại</button>}
-      </section>
-      <section>
-        <h2>Mô phỏng sự kiện</h2>
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          void run(async () => {
-            const result = await request<{ accepted: boolean }>("demo/events", "POST", {
-              kind, test_time: testTime || null,
-            });
-            setAlerts(await request<Alert[]>("alerts"));
-            return result.accepted ? "Đã lưu cảnh báo mô phỏng." : "Sự kiện nằm ngoài khung giờ đã lưu.";
-          });
-        }}>
-          <label>Loại sự kiện<select value={kind} disabled={busy}
-            onChange={(event) => setKind(event.target.value as Kind)}>
-            {Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select></label>
-          <label>Giờ thử (bỏ trống để dùng giờ hiện tại)
-            <input type="time" value={testTime} disabled={busy} onChange={(event) => setTestTime(event.target.value)} />
-          </label>
-          <button disabled={busy || !schedule}>Gửi sự kiện</button>
-        </form>
-        <p role="status">{status}</p>
-      </section>
-      <section>
-        <h2>Lịch sử cảnh báo</h2>
-        {alerts.length ? (
-          <ul>{alerts.map((alert) => (
-            <li key={alert.id}>
-              <strong>{labels[alert.kind]}</strong> · {alert.camera} · {formatter.format(new Date(alert.occurred_at))}
-            </li>
-          ))}</ul>
-        ) : <p>Chưa có cảnh báo.</p>}
-      </section>
-    </main>
-  );
+  return <div className="shell">
+    <header className="topbar">
+      <div className="topbar-inner">
+        <div className="brand"><Mark /> Cảnh báo camera</div>
+        <div className="account"><span>{session.name}<small>{session.role === "admin" ? "Quản trị viên" : "Người dùng"}</small></span>
+          <button className="secondary" disabled={action.busy} onClick={() => void action.run(async () => {
+            await api("auth/logout", "POST");
+            expired();
+          })}>Đăng xuất</button>
+        </div>
+      </div>
+    </header>
+    <div className="workspace">
+      <nav aria-label="Điều hướng chính">
+        {(Object.entries(tabs) as [Tab, string][]).filter(([name]) => session.role === "admin" || name === "alerts" || name === "schedule").map(([name, label]) =>
+          <button key={name} type="button" aria-current={tab === name ? "page" : undefined} onClick={() => setTab(name)}>{label}</button>
+        )}
+      </nav>
+      <main>
+        <Notice {...action} />
+        {tab === "alerts" && <AlertFeed onExpired={expired} />}
+        {tab === "schedule" && <ScheduleForm onExpired={expired} />}
+        {session.role === "admin" && tab === "cameras" && <CameraAdmin />}
+        {session.role === "admin" && tab === "users" && <UserAdmin />}
+      </main>
+    </div>
+  </div>;
 }
