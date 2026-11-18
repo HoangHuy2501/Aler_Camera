@@ -53,6 +53,28 @@ CREATE TABLE IF NOT EXISTS cameras (
       OR (source = 'frigate' AND frigate_name IS NOT NULL AND host IS NULL))
 );
 
+-- Upgrade installations created before Imou Cloud was added.
+ALTER TABLE cameras ADD COLUMN IF NOT EXISTS imou_device_id text;
+ALTER TABLE cameras ADD COLUMN IF NOT EXISTS imou_channel_id text;
+ALTER TABLE cameras ADD COLUMN IF NOT EXISTS imou_cursor timestamptz;
+ALTER TABLE cameras DROP CONSTRAINT IF EXISTS cameras_source_check;
+ALTER TABLE cameras DROP CONSTRAINT IF EXISTS cameras_check;
+ALTER TABLE cameras DROP CONSTRAINT IF EXISTS cameras_source_fields;
+ALTER TABLE cameras ADD CONSTRAINT cameras_source_fields CHECK (
+    (source = 'onvif' AND host IS NOT NULL AND frigate_name IS NULL AND imou_device_id IS NULL AND imou_channel_id IS NULL)
+    OR (source = 'frigate' AND frigate_name IS NOT NULL AND host IS NULL AND imou_device_id IS NULL AND imou_channel_id IS NULL)
+    OR (source = 'imou' AND imou_device_id IS NOT NULL AND imou_channel_id IS NOT NULL
+        AND host IS NULL AND frigate_name IS NULL AND secret IS NULL AND rtsp_secret IS NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cameras_imou_device_channel_idx ON cameras (imou_device_id, imou_channel_id);
+
+CREATE TABLE IF NOT EXISTS imou_oauth (
+    id integer PRIMARY KEY CHECK (id = 1),
+    access_token bytea NOT NULL,
+    refresh_token bytea NOT NULL,
+    expires_at timestamptz NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS camera_access (
   user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   camera_id bigint NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,

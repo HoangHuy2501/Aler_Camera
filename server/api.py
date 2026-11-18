@@ -12,7 +12,7 @@ from security import PASSWORDS, encrypt
 router = APIRouter()
 admin = APIRouter(prefix="/admin", dependencies=[Depends(admin_user)])
 WRITE = [Depends(write_header)]
-CAMERA_FIELDS = """id,name,source,host,port,username,frigate_name,intrusion_zone,
+CAMERA_FIELDS = """id,name,source,host,port,username,frigate_name,intrusion_zone,imou_device_id,imou_channel_id,
                    active,status,status_at,(secret IS NOT NULL) AS has_password,
                    (rtsp_secret IS NOT NULL) AS has_rtsp"""
 USER_FIELDS = "id,email,name,role,active,created_at"
@@ -49,7 +49,7 @@ class UserAccess(BaseModel):
 
 class Camera(BaseModel):
     name: str = Field(min_length=1, max_length=100, pattern=r"\S")
-    source: Literal["onvif", "frigate"]
+    source: Literal["onvif", "frigate", "imou"]
     host: str | None = Field(default=None, max_length=253, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]*$")
     port: int = Field(default=80, ge=1, le=65535)
     username: str | None = Field(default=None, max_length=128)
@@ -57,6 +57,8 @@ class Camera(BaseModel):
     rtsp_url: str | None = Field(default=None, max_length=2048)
     frigate_name: str | None = Field(default=None, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
     intrusion_zone: str | None = Field(default=None, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    imou_device_id: str | None = Field(default=None, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    imou_channel_id: str | None = Field(default=None, pattern=r"^[0-9]{1,4}$")
     active: bool = True
 
     @model_validator(mode="after")
@@ -65,6 +67,14 @@ class Camera(BaseModel):
             raise ValueError("ONVIF cần địa chỉ camera.")
         if self.source == "frigate" and (not self.frigate_name or self.host or self.username or self.password):
             raise ValueError("Frigate cần tên camera trong Frigate.")
+        if self.source == "imou":
+            if not self.imou_device_id or self.imou_channel_id is None:
+                raise ValueError("Imou Cloud cần số serial và kênh camera.")
+            if any(value is not None for value in (self.host, self.username, self.password, self.rtsp_url,
+                                                    self.frigate_name, self.intrusion_zone)):
+                raise ValueError("Thông tin kết nối không phù hợp với Imou Cloud.")
+        elif self.imou_device_id is not None or self.imou_channel_id is not None:
+            raise ValueError("Số serial và kênh chỉ dùng cho Imou Cloud.")
         if self.rtsp_url:
             parsed = urlsplit(self.rtsp_url)
             if parsed.scheme not in {"rtsp", "rtsps"} or not parsed.hostname or any(ch.isspace() for ch in self.rtsp_url):
@@ -216,22 +226,22 @@ def save_camera(body: Camera, request: Request, camera_id: int | None = None):
             if body.rtsp_url is None:
                 rtsp = record["rtsp_secret"]
         values = (body.name.strip(), body.source, body.host, body.port, body.username, password,
-                  rtsp, body.frigate_name, body.intrusion_zone, body.active)
+                  rtsp, body.frigate_name, body.intrusion_zone, body.imou_device_id, body.imou_channel_id, body.active)
         try:
             if camera_id is None:
                 return db.execute(
                     f"""INSERT INTO cameras(name,source,host,port,username,secret,rtsp_secret,
-                               frigate_name,intrusion_zone,active)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING {CAMERA_FIELDS}""", values,
+                               frigate_name,intrusion_zone,imou_device_id,imou_channel_id,active)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING {CAMERA_FIELDS}""", values,
                 ).fetchone()
             return db.execute(
                 f"""UPDATE cameras SET name=%s,source=%s,host=%s,port=%s,username=%s,secret=%s,
-                           rtsp_secret=%s,frigate_name=%s,intrusion_zone=%s,active=%s,
-                           status='pending',status_at=NULL,revision=revision+1
+                           rtsp_secret=%s,frigate_name=%s,intrusion_zone=%s,imou_device_id=%s,imou_channel_id=%s,active=%s,
+                           imou_cursor=NULL,status='pending',status_at=NULL,revision=revision+1
                     WHERE id=%s RETURNING {CAMERA_FIELDS}""", (*values, camera_id),
             ).fetchone()
         except UniqueViolation:
-            raise HTTPException(409, "Tên camera Frigate đã được sử dụng.") from None
+            raise HTTPException(409, "Tên Frigate hoặc kênh Imou Cloud đã được sử dụng.") from None
 
 
 @admin.post("/cameras", status_code=201, dependencies=WRITE)

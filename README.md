@@ -93,3 +93,47 @@ Trong `server/.env`, điền `FRIGATE_MQTT_HOST`, cổng và thông tin xác th�
 - Khi phục vụ người dùng qua HTTPS, đặt `COOKIE_SECURE=true`. Có thể chạy `npm run build` và `npm start` sau reverse proxy HTTPS. Nếu API đổi địa chỉ, đặt `CAMERA_API_URL` trong `client/.env.local` trước khi build.
 - Giữ worker chạy trong suốt thời gian cần giám sát. Worker lưu ảnh JPEG tối đa 2 MB vào PostgreSQL và dọn dữ liệu cũ mặc định sau 30 ngày. Đổi bằng `ALERT_RETENTION_DAYS`. Nếu nguồn sự kiện chưa trả được ảnh, giao diện hiển thị **Chưa có ảnh**.
 - Có thể tắt camera để giữ lịch sử. Xóa camera cũng xóa lịch sử, ảnh và quyền xem thuộc camera đó.
+
+## 6. Camera ở xa qua Imou Cloud
+
+Dùng nguồn này khi chủ camera có thể cấp quyền từ Imou Life và máy chạy worker không vào được mạng LAN của camera. Bản tích hợp hỗ trợ **phát hiện người** và ảnh do Imou trả về. Cấu hình dùng một tài khoản Imou Life đã ủy quyền cho các camera nguồn Imou Cloud.
+
+### Nhận mã ủy quyền
+
+1. Mở [Imou Open Platform](https://open.imoulife.com/) và vào **Console → OAuth**. Tạo dự án OAuth. Imou yêu cầu một **Callback URL after authorization** và có bước xét duyệt. Với dự án cần xét duyệt, dùng URL HTTPS ổn định để địa chỉ còn truy cập được khi dự án được duyệt.
+2. Nếu chưa có endpoint nhận mã, chạy chương trình thử bên dưới từ `server/`. Hai dòng tạo đường dẫn ngẫu nhiên và chạy chương trình trên PowerShell. Giữ đường dẫn này để cấu hình lại khi cần.
+
+   ```powershell
+   $path = "/" + (python -c "import secrets; print(secrets.token_urlsafe(24))")
+   $path
+   python imou_callback.py --path $path
+   ```
+
+3. Trỏ reverse proxy HTTPS vào `127.0.0.1:8765` cho đúng đường dẫn vừa tạo. Khi thử ngắn hạn có thể mở một terminal khác và chạy `cloudflared tunnel --url http://127.0.0.1:8765`. Ghép hostname HTTPS với đường dẫn để điền vào Console. URL Quick Tunnel đổi khi khởi động lại. Chỉ trỏ tunnel vào chương trình nhận mã dùng thử, giữ kín đường dẫn và dừng chương trình sau khi nhận mã.
+4. Sau khi dự án được duyệt, lấy **Project Access Key**, **Project Secret Key** và **User Authorization H5 Page** trong mục OAuth. Lấy **Data Center** trong **Console → My information**, dùng mã vùng, không dùng toàn bộ hostname.
+5. Chủ camera mở **User Authorization H5 Page**, đăng nhập Imou Life và xác nhận ủy quyền. Terminal chạy chương trình thử sẽ in mã OAuth. Dùng mã ngay ở bước cấu hình bên dưới. Nếu bạn được chia sẻ camera, hãy nhờ tài khoản chủ thiết bị thực hiện thao tác cấp quyền.
+
+### Cấu hình server và thêm camera
+
+Điền `IMOU_DATA_CENTER`, `IMOU_PROJECT_ACCESS_KEY` và `IMOU_PROJECT_SECRET_KEY` trong `server/.env`. Giữ `CAMERA_SECRET_KEY` đã dùng trước đây để mã hóa token. `IMOU_DEVICE_TIMEZONE` phải khớp múi giờ camera và mặc định là `Asia/Ho_Chi_Minh`. `IMOU_POLL_SECONDS` mặc định 300 giây, phạm vi 60–600 giây. Kiểm tra hạn mức trong [bảng giá Imou](https://open.imoulife.com/price) trước khi tăng tần suất hoặc số camera.
+
+Sau khi sao lưu DB hiện tại, dừng API và worker rồi chạy từ `server/` bằng Python trong môi trường ảo. Lệnh schema bổ sung cột và bảng OAuth cho DB đang chạy phiên bản trước.
+
+```powershell
+.\.venv\Scripts\python.exe manage.py schema
+.\.venv\Scripts\python.exe manage.py imou-authorize --callback "https://HOST/DUONG-DAN"
+```
+
+Nhập mã khi được hỏi. Token được mã hóa trong PostgreSQL và worker tự làm mới access token. Khi Imou yêu cầu cấp quyền lại, mở lại luồng ủy quyền rồi chạy lại `imou-authorize`. Nếu thay sang tài khoản Imou Life khác, tất cả camera Imou Cloud sẽ dùng quyền mới.
+
+Khởi động API và client. Trên web, vào **Camera → Thêm camera → Imou Cloud**, nhập số serial và kênh camera (thường thử `0` trước trên camera một kênh), rồi lưu. Cấp camera cho người dùng nếu cần. Để thử một sự kiện có sẵn trong Imou Life, lấy ID trên web và chạy từ `server/`:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py imou-check 1 --minutes 120
+```
+
+Thay `1` bằng ID thật. Nếu trả về **JPEG OK**, API đã trả sự kiện người và tải được ảnh. Nếu API từ chối, kiểm tra quyền OAuth của tài khoản chủ camera với Imou. Nếu có sự kiện nhưng thiếu ảnh, thử một sự kiện khác trong Imou Life. Chẩn đoán này chỉ đọc Imou và không tạo cảnh báo trong DB.
+
+Bật lại `worker.py` để nhận cảnh báo theo lịch của người dùng. Worker truy vấn lịch sử và dùng giờ xảy ra sự kiện để xét lịch 22:00–06:00. Thời gian hiện cảnh báo phụ thuộc chu kỳ truy vấn và lúc Imou trả sự kiện. Có thể tạm đặt lịch cả ngày để thử bằng một sự kiện mới. Nguồn Imou Cloud trong phiên bản này đọc sự kiện người qua truy vấn lịch sử.
+
+Tài liệu Imou: [OAuth](https://open.imoulife.com/book/02-concepts/04.oauth-authorization.html) · [Lịch sử cảnh báo](https://open.imoulife.com/book/04-capabilities/06.alarm-messages/03-message-search.html) · [Sự kiện người](https://open.imoulife.com/book/04-capabilities/detection/person/detected.html).

@@ -29,7 +29,7 @@ export function CameraAdmin() {
       <div className="section-head"><h2>Danh sách camera</h2><button className="secondary" disabled={action.busy} onClick={() => void action.run(load)}>Làm mới</button></div>
       {cameras.length === 0 ? <p className="empty">{action.busy ? "Đang tải camera…" : "Chưa có camera."}</p> : (
         <ul className="records">{cameras.map((camera) => <li key={camera.id}>
-          <div className="details"><strong>{camera.name}</strong><span>{camera.source === "onvif" ? `ONVIF · ${camera.host}:${camera.port} · ID ${camera.id}` : `Frigate · ${camera.frigate_name}`}</span></div>
+          <div className="details"><strong>{camera.name}</strong><span>{camera.source === "onvif" ? `ONVIF · ${camera.host}:${camera.port} · ID ${camera.id}` : camera.source === "frigate" ? `Frigate · ${camera.frigate_name}` : `Imou Cloud · Kênh ${camera.imou_channel_id} · ID ${camera.id}`}</span></div>
           <span className="badge">{statusLabel(camera)}</span>
           <div className="record-actions">
             <button className="secondary" onClick={() => setEditing(camera)}>Chỉnh sửa</button>
@@ -67,6 +67,7 @@ function CameraForm({ camera, onSave, onCancel }: {
       password: data.has("clear_password") ? "" : password || null,
       rtsp_url: data.has("clear_rtsp") ? "" : value("rtsp_url"),
       frigate_name: value("frigate_name"), intrusion_zone: value("intrusion_zone"),
+      imou_device_id: value("imou_device_id"), imou_channel_id: value("imou_channel_id"),
     };
     void action.run(async () => {
       await onSave(await api<CameraSettings>(camera ? `admin/cameras/${camera.id}` : "admin/cameras", camera ? "PUT" : "POST", payload));
@@ -78,7 +79,7 @@ function CameraForm({ camera, onSave, onCancel }: {
       <div className="fields">
         <label>Tên hiển thị<input name="name" defaultValue={camera?.name} required maxLength={100} /></label>
         <label>Nguồn sự kiện<select value={source} onChange={(event) => setSource(event.target.value as CameraSettings["source"])}>
-          <option value="onvif">ONVIF trực tiếp</option><option value="frigate">Frigate cục bộ</option>
+          <option value="onvif">ONVIF trực tiếp</option><option value="frigate">Frigate cục bộ</option><option value="imou">Imou Cloud</option>
         </select></label>
       </div>
       {source === "onvif" ? <>
@@ -91,12 +92,15 @@ function CameraForm({ camera, onSave, onCancel }: {
           <label>Mật khẩu camera<input name="password" type="password" autoComplete="new-password" maxLength={256} placeholder={sameSource && camera?.has_password ? "Giữ mật khẩu đã lưu" : undefined} /></label>
         </div>
         {sameSource && camera?.has_password && <label className="check"><input type="checkbox" name="clear_password" /> Xóa mật khẩu camera đã lưu</label>}
-      </> : <div className="fields">
+      </> : source === "frigate" ? <div key="frigate-fields" className="fields">
         <label>Tên camera trong Frigate<input name="frigate_name" defaultValue={camera?.frigate_name ?? ""} required maxLength={80} /></label>
         <label>Vùng xâm nhập<input name="intrusion_zone" defaultValue={camera?.intrusion_zone ?? ""} maxLength={80} placeholder="Ví dụ: san_truoc" /></label>
+      </div> : <div key="imou-fields" className="fields">
+        <label>Số serial camera<input name="imou_device_id" defaultValue={camera?.imou_device_id ?? ""} required maxLength={100} /></label>
+        <label>Kênh camera<input name="imou_channel_id" defaultValue={camera?.imou_channel_id ?? "0"} required pattern="[0-9]{1,4}" /></label>
       </div>}
-      <label>Địa chỉ RTSP lấy ảnh dự phòng<input key={source} name="rtsp_url" type="password" autoComplete="new-password" maxLength={2048} placeholder={sameSource && camera?.has_rtsp ? "Giữ địa chỉ đã lưu" : "rtsp://…"} /></label>
-      {sameSource && camera?.has_rtsp && <label className="check"><input type="checkbox" name="clear_rtsp" /> Xóa địa chỉ RTSP đã lưu</label>}
+      {source !== "imou" && <label>Địa chỉ RTSP lấy ảnh dự phòng<input key={source} name="rtsp_url" type="password" autoComplete="new-password" maxLength={2048} placeholder={sameSource && camera?.has_rtsp ? "Giữ địa chỉ đã lưu" : "rtsp://…"} /></label>}
+      {source !== "imou" && sameSource && camera?.has_rtsp && <label className="check"><input type="checkbox" name="clear_rtsp" /> Xóa địa chỉ RTSP đã lưu</label>}
       <label className="check"><input type="checkbox" name="active" defaultChecked={camera?.active ?? true} /> Bật camera</label>
       <Notice {...action} />
       <div className="record-actions"><button disabled={action.busy}>Lưu camera</button><button type="button" className="secondary" disabled={action.busy} onClick={onCancel}>Hủy</button></div>
