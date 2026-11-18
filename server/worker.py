@@ -13,6 +13,7 @@ from uuid import uuid4
 import paho.mqtt.client as mqtt
 import psycopg
 
+import imou_cloud
 import onvif_source
 from config import database_url, env
 from db import connect_pool
@@ -186,7 +187,7 @@ def run(pool, lock):
             lock.execute("SELECT 1")
             with pool.connection() as db:
                 cameras = db.execute("SELECT * FROM cameras WHERE active").fetchall()
-            selected = {camera["id"]: camera for camera in cameras if camera["source"] == "onvif"}
+            selected = {camera["id"]: camera for camera in cameras if camera["source"] in {"onvif", "imou"}}
             frigate.cameras = {camera["frigate_name"]: camera for camera in cameras if camera["source"] == "frigate"}
             for camera_id, (revision, stop, thread) in list(watchers.items()):
                 current = selected.get(camera_id)
@@ -197,7 +198,8 @@ def run(pool, lock):
             for camera_id, camera in selected.items():
                 if camera_id not in watchers:
                     stop = Event()
-                    thread = Thread(target=watch_onvif, args=(pool, camera, stop))
+                    target = imou_cloud.poll if camera["source"] == "imou" else watch_onvif
+                    thread = Thread(target=target, args=(pool, camera, stop))
                     watchers[camera_id] = (camera["revision"], stop, thread)
                     thread.start()
             if monotonic() >= next_prune:

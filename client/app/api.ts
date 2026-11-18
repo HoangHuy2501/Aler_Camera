@@ -32,11 +32,12 @@ export const types = {
 export type Kind = keyof typeof types;
 export type Session = { id: number; email: string; name: string; role: "admin" | "user" };
 export type Camera = {
-  id: number; name: string; source: "onvif" | "frigate"; active: boolean;
+  id: number; name: string; source: "onvif" | "frigate" | "imou"; active: boolean;
   status: "pending" | "connected" | "error"; status_at: string | null;
 };
 export type CameraSettings = Camera & {
   host: string | null; port: number; username: string | null; has_password: boolean;
+  imou_device_id: string | null; imou_channel_id: string | null;
   has_rtsp: boolean; frigate_name: string | null; intrusion_zone: string | null;
 };
 export type Account = Session & { active: boolean; camera_ids: number[] };
@@ -47,6 +48,6 @@ export function statusLabel(camera: Camera) {
   if (!camera.active) return "Đã tắt";
   if (camera.status === "pending") return "Chờ kết nối";
   if (camera.status === "error") return "Mất kết nối";
-  if (camera.status_at && Date.now() - Date.parse(camera.status_at) > 180_000) return "Chưa có cập nhật";
+  if (camera.status_at && Date.now() - Date.parse(camera.status_at) > (camera.source === "imou" ? 900_000 : 180_000)) return "Chưa có cập nhật";
   return "Đã kết nối";
 }
